@@ -33,3 +33,6 @@ dependencies = [
 
 [tool.uv]
 prerelease = "disallow"
+
+[tool.uv.extra-build-dependencies]
+autoawq = ["torch==2.9.0+cu128"]
