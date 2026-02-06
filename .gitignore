@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+models/
+outputs/
+submit.zip
+*.safetensors
+*.bin
+*.pt
+*.log
+*.tmp
+hf_cache/
