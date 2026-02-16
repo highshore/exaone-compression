@@ -11,3 +11,5 @@ submit.zip
 *.log
 *.tmp
 hf_cache/
+.env.local
+project_rules.txt

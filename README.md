@@ -13,7 +13,7 @@ cd exaone-compression
 curl -LsSf https://astral.sh/uv/install.sh | sh
 source ~/.bashrc
 
-uv sync --extra-index-url https://download.pytorch.org/whl/cu128
+uv sync --extra-index-url https://download.pytorch.org/whl/cu128 --index-strategy unsafe-best-match
 ```
 
 Run checks and pipeline steps:
@@ -21,7 +21,8 @@ Run checks and pipeline steps:
 ```bash
 uv run python scripts/00_env_check.py
 uv run bash scripts/01_download_awq_baseline.sh
-uv run python scripts/02_verify_vllm.py --model-dir models/base
+uv run python scripts/02_verify_vllm.py --model-dir models/base --report-file outputs/verify_vllm.json
+uv run python scripts/02_verify_transformers.py --model-dir models/base
 uv run python scripts/06_package_submit.py --model-dir models/base --output submit.zip
 ```
 
@@ -35,6 +36,7 @@ exaone-compression/
     00_env_check.py
     01_download_awq_baseline.sh
     02_verify_vllm.py
+    02_verify_transformers.py
     03_lora_train.py
     04_merge_lora.py
     05_awq_quantize.py
@@ -52,6 +54,8 @@ exaone-compression/
 - The evaluation server has no internet access.
 - Pin to the exact dependency versions to avoid mismatch.
 - `submit.zip` must contain a top-level `model/` directory only.
+- If vLLM crashes on first load, rerun verification in eager mode:
+  `uv run python scripts/02_verify_vllm.py --model-dir models/base --enforce-eager --dtype float16`.
 
 ## Environment Variables
 
