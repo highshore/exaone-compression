@@ -2,51 +2,51 @@
 
 ## 한국어 (KOR)
 
-### 1) 이 저장소의 현재 상태 (처음부터가 아님)
-이 저장소는 "기초 세팅" 단계가 아니라, 아래 검증을 이미 끝낸 상태를 기준으로 정리되어 있습니다.
+### 1) 목표와 범위
+이 저장소는 `project_rules.txt` 기준(고정 평가 환경 + `submit.zip` 구조)에서,
+EXAONE-4.0-1.2B를 **vLLM에서 실제 구동 가능한 형태로 경량화**하기 위한 실행형 파이프라인입니다.
 
-- 기본 모델 다운로드/로딩 검증 완료: `models/base`
-- 압축 모델 후보 검증 완료: `models/compressed-l29`
-- 제출물 생성 검증 완료: `submit_compressed_l29.zip` (zip 최상위 `model/`만 존재)
-- vLLM/Transformers 양쪽 로딩 및 생성 성공 확인
+핵심 목표:
+- 모델 크기 축소
+- 토큰당 추론 시간 개선
+- 품질 붕괴 최소화
+- 제출 형식(`submit.zip/model/*`) 준수
 
-즉, 이 README는 "무에서 시작"이 아니라, 이미 통과한 경로를 재현하는 실행 가이드입니다.
+### 2) 최종 채택한 전략 (실제로 동작 검증된 조합)
+1. Structured Pruning (Layer Drop)
+- `scripts/05_awq_quantize.py`
+- 30개 레이어 중 29개 유지(`target-layers=29`, uniform)
+- 결과물: `models/compressed-l29`
 
-검증 스냅샷(동일 프롬프트 `hello`, eager 모드 기준):
+2. Distillation-Style Recovery Calibration
+- `scripts/07_distill_student.py`
+- Teacher(`models/base`) 응답을 생성해 Student(`models/compressed-l29`)의 `lm_head`만 보정
+- 안정 검증된 설정: `num_samples=20`, `epochs=1`, `batch_size=2`, `lr=5e-6`
+- 결과물: `models/compressed-l29-distilled`
 
-- baseline (`models/base`): `27.677s`
-- compressed (`models/compressed-l29`): `23.509s`
-- 속도비 (`baseline/compressed`): `1.177x`
-- 샘플 출력 패턴: baseline/compressed 모두 `hellohello...` 형태 유지
+3. vLLM 기반 비교 평가
+- `scripts/08_eval_compare.py`
+- baseline vs compressed vs distilled를 같은 프롬프트 세트로 비교
+- 비교 지표:
+  - elapsed time
+  - speedup vs baseline
+  - avg similarity to baseline
+  - exact match rate
 
-### 2) 여기까지 오기 위해 확정한 기술 선택
+### 3) 평가 환경 호환성 (중요)
+`project_rules.txt`의 평가 서버 버전에 맞춰 동작하도록 구성했습니다.
 
-1. 런타임 버전 고정
-- 대회 평가 환경 기준으로 `torch==2.9.0+cu128`을 사용합니다.
-- `vllm==0.14.1` 메타데이터는 `torch==2.9.1`을 요구하지만, 실제 런타임은 `2.9.0+cu128`에서 동작 검증했습니다.
-- 이를 재현 가능하게 유지하기 위해 `pyproject.toml`의 `tool.uv.override-dependencies`를 사용합니다.
-
-2. 압축 방식
-- `scripts/05_awq_quantize.py`는 현재 AWQ가 아니라 "레이어 드롭(layer-drop)" 방식입니다.
-- EXAONE-4.0-1.2B의 30개 레이어 중 균등 샘플링으로 일부만 유지합니다.
-
-3. 기본 제출 후보 선택 기준
-- 여러 레이어 수를 시험했을 때, 너무 공격적(예: 24~28)은 샘플 출력 품질 붕괴가 잦았습니다.
-- `29/30`은 샘플 프롬프트 기준 출력 패턴을 유지하면서 속도 이득이 있어 기본 후보로 채택했습니다.
-
-### 3) 권장 실행 환경 (RunPod)
-
-- Python: `3.11.x`
+- Python: `3.11`
 - CUDA: `12.8`
-- vLLM: `0.14.1`
-- 핵심 Torch 스택:
-  - `torch==2.9.0+cu128`
-  - `torchaudio==2.9.0+cu128`
-  - `torchvision==0.24.0+cu128`
-  - `triton==3.5.0`
+- `torch==2.9.0+cu128`
+- `transformers==4.57.3`
+- `vllm==0.14.1`
 
-### 4) 시작 위치 (RunPod에서 처음 세팅)
+참고:
+- `vllm` 메타데이터는 `torch==2.9.1`을 요구할 수 있지만,
+  실제 런타임 검증은 `torch==2.9.0+cu128`에서 통과한 조합으로 고정했습니다.
 
+### 4) RunPod에서 처음부터 재현하는 순서
 ```bash
 git clone <your-repo-url>
 cd exaone-compression
@@ -59,8 +59,7 @@ export TRANSFORMERS_CACHE=/workspace/hf_cache
 export HF_HUB_ENABLE_HF_TRANSFER=0
 ```
 
-### 5) 검증된 전체 파이프라인 (순서 그대로 실행)
-
+### 5) 전체 파이프라인 (동작 검증 완료 순서)
 ```bash
 make sync
 make check
@@ -70,100 +69,102 @@ make verify
 make verify-compressed
 make verify-tfm
 make verify-tfm-compressed
+make distill
+make verify-distilled
+make verify-tfm-distilled
+make evaluate
 make package-compressed
+make package-distilled
 ```
 
-각 명령의 의미:
+### 6) vLLM 동작 검증 예시 (프롬프트/출력)
+검증 스크립트:
+- `scripts/02_verify_vllm.py`
 
-- `make sync`: 평가 환경 호환 버전으로 의존성 동기화
-- `make check`: 파이썬/torch/vllm/transformers 버전 체크
-- `make baseline`: 기본 모델 다운로드 + 파일 유효성 검사
-- `make compress`: 30 -> 29 레이어 압축 모델 생성 (`models/compressed-l29`)
-- `make verify`: 기본 모델 vLLM 생성 테스트
-- `make verify-compressed`: 압축 모델 vLLM 생성 테스트
-- `make verify-tfm`: 기본 모델 Transformers 생성 테스트
-- `make verify-tfm-compressed`: 압축 모델 Transformers 생성 테스트
-- `make package-compressed`: 제출 zip 생성 (`submit_compressed_l29.zip`)
+예시 프롬프트:
+- `hello`
 
-### 6) 결과물 경로
+예시 출력 패턴(실제 검증 시 관찰):
+- baseline: `hellohello...`
+- compressed-l29: `hellohello...`
+- compressed-l29-distilled: `hellohello...`
 
-- 기본 모델: `models/base`
-- 압축 모델: `models/compressed-l29`
-- vLLM 검증 리포트: `outputs/verify_vllm_compressed.json`
-- 제출 파일: `submit_compressed_l29.zip`
+의미:
+- 압축/보정 후에도 최소 생성 경로가 끊기지 않고,
+- vLLM 로드 + 생성이 모두 성공함을 확인했습니다.
 
-### 7) 제출 형식 검증 (반드시 확인)
+### 7) 산출물
+- Baseline: `models/base`
+- Compressed: `models/compressed-l29`
+- Distilled: `models/compressed-l29-distilled`
+- 평가 리포트: `outputs/eval_compare.json`
+- 제출 파일:
+  - `submit_compressed_l29.zip`
+  - `submit_compressed_l29_distilled.zip`
 
+### 8) 제출 형식 검증
 ```bash
 python - <<'PY'
 import zipfile
-z = zipfile.ZipFile("submit_compressed_l29.zip")
-roots = sorted({n.split("/")[0] for n in z.namelist() if n.strip()})
-print("top_level_entries:", roots)
-print("valid:", roots == ["model"])
+for p in ["submit_compressed_l29.zip", "submit_compressed_l29_distilled.zip"]:
+    z = zipfile.ZipFile(p)
+    roots = sorted({n.split('/')[0] for n in z.namelist() if n.strip()})
+    print(p, roots, roots == ["model"])
 PY
 ```
 
-예상 결과:
-- `top_level_entries: ['model']`
-- `valid: True`
-
-### 8) 운영 메모
-
-- `pip check`에서 `vllm -> torch==2.9.1` 경고가 나올 수 있습니다.
-- 이 프로젝트는 평가 환경 재현(`torch==2.9.0+cu128`)을 우선하며, 최종 판단은 `make verify*` 런타임 테스트 기준으로 합니다.
-- 기본 모델 vLLM 검증이 불안정하면 `make verify-safe`를 사용하세요.
+예상:
+- 각 zip의 최상위 엔트리는 `model` 하나만 존재
 
 ---
 
 ## English (ENG)
 
-### 1) Current repository state (not a zero-state setup)
-This repository is already beyond initial setup. The following path has been
-validated:
+### 1) Goal and Scope
+This repository provides a reproducible compression pipeline for EXAONE-4.0-1.2B,
+aligned with `project_rules.txt` constraints (fixed evaluation stack + `submit.zip` structure).
 
-- Baseline model download/load validated: `models/base`
-- Compressed candidate validated: `models/compressed-l29`
-- Submission packaging validated: `submit_compressed_l29.zip` (zip root is only `model/`)
-- Both vLLM and Transformers load/generate checks passed
+Primary goals:
+- reduce model size
+- improve inference efficiency
+- keep quality degradation controlled
+- satisfy packaging rules (`submit.zip/model/*`)
 
-This README is a reproducible runbook for that validated path.
+### 2) Final Strategy We Kept (worked path only)
+1. Structured Pruning (Layer Drop)
+- `scripts/05_awq_quantize.py`
+- Keep 29 out of 30 layers (`target-layers=29`, uniform)
+- Output: `models/compressed-l29`
 
-Validation snapshot (same prompt `hello`, eager mode):
+2. Distillation-Style Recovery Calibration
+- `scripts/07_distill_student.py`
+- Generate teacher outputs from `models/base`, then calibrate only the student `lm_head`
+- Stable settings: `num_samples=20`, `epochs=1`, `batch_size=2`, `lr=5e-6`
+- Output: `models/compressed-l29-distilled`
 
-- baseline (`models/base`): `27.677s`
-- compressed (`models/compressed-l29`): `23.509s`
-- speed ratio (`baseline/compressed`): `1.177x`
-- sample output pattern: both baseline/compressed kept `hellohello...`
+3. vLLM-based Comparative Evaluation
+- `scripts/08_eval_compare.py`
+- Compares baseline vs compressed vs distilled on the same prompt set
+- Metrics:
+  - elapsed time
+  - speedup vs baseline
+  - average text similarity to baseline
+  - exact match rate
 
-### 2) Decisions that got us here
+### 3) Evaluation Compatibility (important)
+Configured to match the package versions in `project_rules.txt`:
 
-1. Runtime pinning
-- We target the competition environment and pin `torch==2.9.0+cu128`.
-- `vllm==0.14.1` metadata asks for `torch==2.9.1`, but runtime was validated on `2.9.0+cu128`.
-- Reproducibility is enforced via `tool.uv.override-dependencies` in `pyproject.toml`.
-
-2. Compression method
-- `scripts/05_awq_quantize.py` currently implements structured layer-drop (not AWQ yet).
-- For EXAONE-4.0-1.2B, layers are selected with uniform sampling.
-
-3. Default submission candidate
-- More aggressive drops (for example 24~28) often produced unstable sample outputs.
-- `29/30` gave a safer quality/speed tradeoff, so it is the default candidate.
-
-### 3) Recommended environment (RunPod)
-
-- Python: `3.11.x`
+- Python: `3.11`
 - CUDA: `12.8`
-- vLLM: `0.14.1`
-- Torch stack:
-  - `torch==2.9.0+cu128`
-  - `torchaudio==2.9.0+cu128`
-  - `torchvision==0.24.0+cu128`
-  - `triton==3.5.0`
+- `torch==2.9.0+cu128`
+- `transformers==4.57.3`
+- `vllm==0.14.1`
 
-### 4) Starting point (first setup on RunPod)
+Note:
+- `vllm` package metadata can still declare `torch==2.9.1`.
+- We keep the runtime pinned to `torch==2.9.0+cu128` because that is the target eval environment and runtime checks pass under that pin.
 
+### 4) Clean RunPod Setup
 ```bash
 git clone <your-repo-url>
 cd exaone-compression
@@ -176,8 +177,7 @@ export TRANSFORMERS_CACHE=/workspace/hf_cache
 export HF_HUB_ENABLE_HF_TRANSFER=0
 ```
 
-### 5) Full validated pipeline (run in this order)
-
+### 5) Full Pipeline (validated order)
 ```bash
 make sync
 make check
@@ -187,46 +187,48 @@ make verify
 make verify-compressed
 make verify-tfm
 make verify-tfm-compressed
+make distill
+make verify-distilled
+make verify-tfm-distilled
+make evaluate
 make package-compressed
+make package-distilled
 ```
 
-What each step does:
+### 6) vLLM Validation Example (prompt/output)
+Validation script:
+- `scripts/02_verify_vllm.py`
 
-- `make sync`: dependency sync with evaluation-compatible pins
-- `make check`: version checks for python/torch/vllm/transformers
-- `make baseline`: baseline model download + validation
-- `make compress`: builds 30 -> 29 layer compressed model (`models/compressed-l29`)
-- `make verify`: baseline vLLM smoke test
-- `make verify-compressed`: compressed model vLLM smoke test
-- `make verify-tfm`: baseline Transformers smoke test
-- `make verify-tfm-compressed`: compressed model Transformers smoke test
-- `make package-compressed`: build submission zip (`submit_compressed_l29.zip`)
+Example prompt:
+- `hello`
 
-### 6) Output locations
+Observed output pattern:
+- baseline: `hellohello...`
+- compressed-l29: `hellohello...`
+- compressed-l29-distilled: `hellohello...`
 
-- Baseline model: `models/base`
-- Compressed model: `models/compressed-l29`
-- vLLM report: `outputs/verify_vllm_compressed.json`
-- Submission zip: `submit_compressed_l29.zip`
+Interpretation:
+- vLLM load and generation succeed for all three checkpoints.
 
-### 7) Submission format check
+### 7) Artifacts
+- Baseline: `models/base`
+- Compressed: `models/compressed-l29`
+- Distilled: `models/compressed-l29-distilled`
+- Comparison report: `outputs/eval_compare.json`
+- Submission zips:
+  - `submit_compressed_l29.zip`
+  - `submit_compressed_l29_distilled.zip`
 
+### 8) Submission Structure Check
 ```bash
 python - <<'PY'
 import zipfile
-z = zipfile.ZipFile("submit_compressed_l29.zip")
-roots = sorted({n.split("/")[0] for n in z.namelist() if n.strip()})
-print("top_level_entries:", roots)
-print("valid:", roots == ["model"])
+for p in ["submit_compressed_l29.zip", "submit_compressed_l29_distilled.zip"]:
+    z = zipfile.ZipFile(p)
+    roots = sorted({n.split('/')[0] for n in z.namelist() if n.strip()})
+    print(p, roots, roots == ["model"])
 PY
 ```
 
 Expected:
-- `top_level_entries: ['model']`
-- `valid: True`
-
-### 8) Operational notes
-
-- `pip check` may report `vllm -> torch==2.9.1` mismatch.
-- In this project, priority is evaluation-environment compatibility (`torch==2.9.0+cu128`) plus runtime smoke tests (`make verify*`).
-- If baseline vLLM is unstable on your host, use `make verify-safe`.
+- each zip has only one top-level entry: `model`
