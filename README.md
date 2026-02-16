@@ -1,10 +1,29 @@
 # EXAONE Compression Toolkit
 
-This repo is a reproducible pipeline for EXAONE-4.0-1.2B compression work.
-The evaluator ignores code and only reads `submit.zip` -> `model/`, so this repo
-exists to make your RunPod execution deterministic and repeatable.
+Reproducible pipeline for EXAONE-4.0-1.2B compression targeting the hackathon
+evaluation format (`submit.zip` containing only `model/`).
 
-## Quick Start
+This README documents only the workflow that was validated end-to-end.
+
+## Proven Outcome
+
+- Baseline model: `models/base`
+- Compressed model: `models/compressed-l29` (uniform layer-drop, 30 -> 29 layers)
+- Final artifact: `submit_compressed_l29.zip`
+- vLLM and Transformers load/generate both succeeded for the compressed model.
+
+## Environment
+
+- Python: `3.11.x`
+- CUDA: `12.8`
+- vLLM: `0.14.1`
+- Torch stack pinned to evaluation target:
+  - `torch==2.9.0+cu128`
+  - `torchaudio==2.9.0+cu128`
+  - `torchvision==0.24.0+cu128`
+  - `triton==3.5.0`
+
+## From Scratch (RunPod)
 
 ```bash
 git clone <your-repo-url>
@@ -13,56 +32,54 @@ cd exaone-compression
 curl -LsSf https://astral.sh/uv/install.sh | sh
 source ~/.bashrc
 
-uv sync --extra-index-url https://download.pytorch.org/whl/cu128 --index-strategy unsafe-best-match
+export HF_HOME=/workspace/hf_cache
+export TRANSFORMERS_CACHE=/workspace/hf_cache
+export HF_HUB_ENABLE_HF_TRANSFER=0
 ```
 
-Run checks and pipeline steps:
+Run the full pipeline:
 
 ```bash
-uv run python scripts/00_env_check.py
-uv run bash scripts/01_download_awq_baseline.sh
-uv run python scripts/02_verify_vllm.py --model-dir models/base --report-file outputs/verify_vllm.json
-uv run python scripts/02_verify_transformers.py --model-dir models/base
-uv run python scripts/06_package_submit.py --model-dir models/base --output submit.zip
+make sync
+make check
+make baseline
+make compress
+make verify
+make verify-compressed
+make verify-tfm
+make verify-tfm-compressed
+make package-compressed
 ```
 
-## Layout
+Primary outputs:
 
+- Compressed model: `models/compressed-l29`
+- vLLM report: `outputs/verify_vllm_compressed.json`
+- Submission zip: `submit_compressed_l29.zip`
+
+## Submission Format Check
+
+```bash
+python - <<'PY'
+import zipfile
+z = zipfile.ZipFile("submit_compressed_l29.zip")
+roots = sorted({n.split("/")[0] for n in z.namelist() if n.strip()})
+print("top_level_entries:", roots)
+print("valid:", roots == ["model"])
+PY
 ```
-exaone-compression/
-  pyproject.toml
-  uv.lock
-  scripts/
-    00_env_check.py
-    01_download_awq_baseline.sh
-    02_verify_vllm.py
-    02_verify_transformers.py
-    03_lora_train.py
-    04_merge_lora.py
-    05_awq_quantize.py
-    06_package_submit.py
-  configs/
-    lora.yaml
-    awq.json
-  README.md
-  .gitignore
-  Makefile
-```
+
+Expected output:
+
+- `top_level_entries: ['model']`
+- `valid: True`
 
 ## Notes
 
-- The evaluation server has no internet access.
-- Pin to the exact dependency versions to avoid mismatch.
-- `submit.zip` must contain a top-level `model/` directory only.
-- If vLLM crashes on first load, rerun verification in eager mode:
-  `uv run python scripts/02_verify_vllm.py --model-dir models/base --enforce-eager --dtype float16`.
-
-## Environment Variables
-
-Use a persistent cache location on RunPod to avoid repeated downloads:
-
-```bash
-export HF_HOME=/workspace/hf_cache
-export TRANSFORMERS_CACHE=/workspace/hf_cache
-export HF_HUB_ENABLE_HF_TRANSFER=1
-```
+- `scripts/05_awq_quantize.py` is the compression script (name retained for
+  compatibility with older pipeline naming).
+- `vllm==0.14.1` metadata declares `torch==2.9.1`, but this project enforces
+  evaluation-compatible `torch==2.9.0+cu128` through `pyproject.toml` overrides.
+  Use runtime smoke tests (`make verify*`) as the source of truth.
+- If baseline `make verify` is unstable on your host, run:
+  - `make verify-safe`

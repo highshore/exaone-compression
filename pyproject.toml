@@ -32,6 +32,12 @@ dependencies = [
 
 [tool.uv]
 prerelease = "disallow"
+override-dependencies = [
+  "torch==2.9.0+cu128",
+  "torchaudio==2.9.0+cu128",
+  "torchvision==0.24.0+cu128",
+  "triton==3.5.0",
+]
 
 [tool.uv.extra-build-dependencies]
 autoawq = ["torch==2.9.0+cu128"]
