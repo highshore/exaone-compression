@@ -1,15 +1,32 @@
-.venv/
+# Python
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+
+# Virtual env / local env
+.venv/
+.env.local
+
+# IDE / OS
+.vscode/
 .DS_Store
+
+# Generated model artifacts
+model/
 models/
 outputs/
+submit/
 submit.zip
+submit_*.zip
 *.safetensors
 *.bin
 *.pt
+
+# Runtime logs / temp / cache
 *.log
 *.tmp
 hf_cache/
-.env.local
+
+# Local notes / rules
 project_rules.txt
