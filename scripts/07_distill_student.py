@@ -265,7 +265,7 @@ def parse_args() -> argparse.Namespace:
             "Builds teacher outputs and calibrates the student lm_head."
         )
     )
-    parser.add_argument("--teacher-model", default="models/base")
+    parser.add_argument("--teacher-model", default="open/base_model")
     parser.add_argument("--student-model", default="models/compressed-l29")
     parser.add_argument("--output-dir", default="models/compressed-l29-distilled")
     parser.add_argument("--num-samples", type=int, default=20)

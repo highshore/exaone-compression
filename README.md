@@ -1,5 +1,8 @@
 # EXAONE Compression Toolkit
 
+Official baseline source for this repo is `open/base_model` (from the organizer-provided `open.zip`).
+All baseline-dependent commands are aligned to that path.
+
 ## 한국어 (KOR)
 
 ### 1) 문제와 원인
@@ -29,7 +32,7 @@ EXAONE 계열(특히 압축/양자화 변형 포함)은 이 설정에서 EOS로 
 
 | Model | Elapsed (s) | Speedup | Avg Similarity | Exact Match | Non-Empty Rate |
 |---|---:|---:|---:|---:|---:|
-| `models/base` | 27.146 | 1.0000 | 1.0000 | 1.0 | 1.0 |
+| `open/base_model` | 27.146 | 1.0000 | 1.0000 | 1.0 | 1.0 |
 | `models/base-distilled` | 15.505 | 1.7508 | 0.9691 | 0.9 | 1.0 |
 | `models/compressed-l29` | 15.234 | 1.7819 | 0.4965 | 0.0 | 1.0 |
 | `models/base-llmc-awq` | 17.166 | 1.5814 | 0.5420 | 0.0 | 1.0 |
@@ -44,12 +47,12 @@ EXAONE 계열(특히 압축/양자화 변형 포함)은 이 설정에서 EOS로 
 
 ### 4) 생성 예시 (수정 후)
 Prompt: `Explain model compression in one paragraph.`
-- `models/base`: `Model compression is the technique used to reduce the size ...`
+- `open/base_model`: `Model compression is the technique used to reduce the size ...`
 - `models/base-llmc-awq`: `Model compression is the process of reducing the size ...`
 - `models/compressed-l29-llmc-awq`: `Model compression is a technique used in deep learning ...`
 
 Prompt: `hello`
-- `models/base`: `Hello! 😊 How can I assist you today?`
+- `open/base_model`: `Hello! 😊 How can I assist you today?`
 - `models/compressed-l29`: `Hello! How can I assist you today?`
 - `models/base-llmc-awq`: `Hello! 😊 How can I help you today?`
 
@@ -57,7 +60,7 @@ Prompt: `hello`
 ```bash
 # 8개 모델 비교 (chat-fix 기본값 사용)
 uv run python scripts/08_eval_compare.py \
-  --baseline-model models/base \
+  --baseline-model open/base_model \
   --candidate-models \
     models/base-distilled \
     models/compressed-l29 \
@@ -84,6 +87,7 @@ uv run python scripts/02_verify_vllm.py \
 ### 1) Problem and Root Cause
 The previous eval path used `llm.generate()` with plain prompts.
 For EXAONE variants (especially compressed/quantized), that frequently caused immediate EOS and empty outputs.
+The organizer-provided baseline path in this repo is `open/base_model`.
 
 ### 2) Refactor Applied
 1. `scripts/08_eval_compare.py`
@@ -107,3 +111,30 @@ Result:
 ### 4) Notes
 - Similarity/exact-match now compare non-empty outputs, so they are more meaningful than before.
 - The metric is still a proxy; final leaderboard quality should be judged on task-specific benchmark outputs.
+
+### 5) Stronger Recovery + Better Evaluation (New)
+To improve leaderboard potential above low scores, this repo now includes:
+- LoRA-based distillation recovery for pruned model (`scripts/03_lora_train.py`)
+- LoRA merge to standalone HF checkpoint (`scripts/04_merge_lora.py`)
+- Benchmark-style quality evaluation (`scripts/09_eval_quality.py`)
+- Token-level speed evaluation aligned with `sec/token` normalization (`scripts/10_eval_token_latency.py`)
+
+Run:
+```bash
+# 1) Build pruned model first
+make compress
+
+# 2) Strong recovery: LoRA distill + merge
+make recover-lora
+
+# 3) Evaluate quality proxy (MMLU + BoolQ)
+make eval-quality
+
+# 4) Evaluate speed proxy (token latency / SpeedNorm-like)
+make eval-token-speed
+```
+
+If `peft` is missing:
+```bash
+uv pip install 'peft>=0.17,<0.18'
+```

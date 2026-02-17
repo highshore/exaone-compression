@@ -77,7 +77,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Compare candidate models against a baseline model using vLLM generation."
     )
-    parser.add_argument("--baseline-model", default="models/base")
+    parser.add_argument("--baseline-model", default="open/base_model")
     parser.add_argument(
         "--candidate-models",
         nargs="+",

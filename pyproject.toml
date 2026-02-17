@@ -28,6 +28,7 @@ dependencies = [
   "immutabledict==4.2.2",
   "torch-c-dlpack-ext==0.1.4",
   "vllm==0.14.1",
+  "peft==0.17.1",
 ]
 
 [tool.uv]
