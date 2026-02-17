@@ -2,84 +2,60 @@
 
 ## 한국어 (KOR)
 
-### 1) 목적
-`project_rules.txt` 고정 환경(`torch==2.9.0+cu128`, `transformers==4.57.3`, `vllm==0.14.1`) 기준으로,
-EXAONE-4.0-1.2B 경량화 모델을 HF 표준 형식으로 만들고 `submit.zip/model/*`로 제출 가능하게 하는 저장소입니다.
+### 1) 문제와 원인
+기존 평가 스크립트(`scripts/08_eval_compare.py`)는 `llm.generate()`에 plain prompt 문자열을 직접 넣고 있었습니다.
+EXAONE 계열(특히 압축/양자화 변형 포함)은 이 설정에서 EOS로 즉시 종료되는 경우가 많아, 다수 프롬프트가 빈 문자열(`''`)이 되는 문제가 있었습니다.
 
-### 2) 실제로 완주한 경로 (성공 경로만)
-1. Baseline 준비 및 vLLM eager 로드/생성 검증
-2. Structured pruning (30 -> 29 layers): `models/compressed-l29`
-3. Distillation-style 보정: `models/compressed-l29-distilled`, `models/base-distilled`
-4. AWQ quantization (llmcompressor + compressed-tensors W4A16)
-5. 8개 조합 일괄 비교: `scripts/08_eval_compare.py`
+### 2) 적용한 수정 (Refactor)
+빈 출력 문제를 해결하기 위해 아래를 코드에 반영했습니다.
 
-### 3) 재실행 성능 비교 (8개 모델)
-재실행 리포트:
-- `/workspace/exaone-compression-clean/outputs/eval_compare_all_8cases_rerun.json`
+1. `scripts/08_eval_compare.py`
+- 생성 경로를 `generate()` -> `chat()`로 변경
+- 프롬프트를 chat 메시지 형태(`[{"role":"user","content":...}]`)로 전달
+- 기본 샘플링을 `temperature=0.0`, `min_tokens=8`, `max_tokens=64`로 고정
+- `non_empty_count`, `non_empty_rate` 지표를 리포트에 추가
 
-기준값:
-- Baseline elapsed: `26.833s`
-- Baseline size: `2.394 GiB`
+2. `scripts/02_verify_vllm.py`
+- 검증도 동일하게 `chat()` 경로 사용
+- 빈 문자열이면 즉시 실패하도록 강제 (`Generated empty output.`)
 
-| Case | Method | Model Dir | Elapsed (s) | Speedup | Avg Sim | Exact | Size (GiB) | Size Delta vs Base |
-|---|---|---|---:|---:|---:|---:|---:|---:|
-| 1 | original | `models/base` | 26.833 | 1.0000 | 1.0 | 1.0 | 2.394 | 0.00% |
-| 2 | distilled only | `models/base-distilled` | 15.420 | 1.7401 | 1.0 | 1.0 | 2.784 | -16.31% (larger) |
-| 3 | pruned only | `models/compressed-l29` | 14.222 | 1.8867 | 1.0 | 1.0 | 2.327 | +2.79% smaller |
-| 4 | quantized only | `models/base-llmc-awq` | 15.170 | 1.7688 | 0.9 | 0.9 | 1.306 | +45.46% smaller |
-| 5 | distilled + pruned | `models/compressed-l29-distilled` | 10.185 | 2.6346 | 1.0 | 1.0 | 2.718 | -13.53% (larger) |
-| 6 | pruned + quantized | `models/compressed-l29-llmc-awq` | 10.735 | 2.4996 | 0.7 | 0.7 | 1.288 | +46.18% smaller |
-| 7 | distilled + quantized | `models/base-distilled-llmc-awq` | 10.087 | 2.6602 | 0.9 | 0.9 | 1.306 | +45.46% smaller |
-| 8 | all (distilled+pruned+quantized) | `models/compressed-l29-distilled-llmc-awq` | 10.374 | 2.5866 | 0.7 | 0.7 | 1.288 | +46.18% smaller |
+### 3) 수정 후 재검증 결과 (8개 모델)
+리포트 파일:
+- `/workspace/exaone-compression-clean/outputs/eval_compare_all_8cases_chatfix.json`
 
-### 4) 10개 고정 프롬프트 출력 결과 (모델별)
-프롬프트 목록:
-1. Explain model compression in one paragraph.
-2. List 3 practical tips to reduce LLM latency.
-3. What is knowledge distillation?
-4. How is structured pruning different from unstructured pruning?
-5. quantization 과 pruning 의 차이를 한국어로 짧게 설명해줘.
-6. 모델 경량화 검증에서 꼭 봐야 할 지표를 3개 말해줘.
-7. Explica brevemente la cuantización de modelos.
-8. Dame dos ideas para desplegar LLMs en dispositivos edge.
-9. hello
-10. Write one short sentence about transformers.
+핵심 결과:
+- **baseline + 7 candidates 전부 non_empty_rate = 1.0**
+- 즉, 10개 고정 프롬프트 기준 **모든 모델이 빈 출력 없이 생성 성공**
 
-표기:
-- `∅`: empty string (`''`)
-- `␠`: single space (`' '`)
-- `h×24`: `hello` 24회 반복 문자열
-- `ko-3-loop`: `" 3은 3과 3과 3을 3으로 3으로 3으로 3으로 3으로 3으로 3으로 3으로 3으로 3으로 3으로 3으로"`
+| Model | Elapsed (s) | Speedup | Avg Similarity | Exact Match | Non-Empty Rate |
+|---|---:|---:|---:|---:|---:|
+| `models/base` | 27.146 | 1.0000 | 1.0000 | 1.0 | 1.0 |
+| `models/base-distilled` | 15.505 | 1.7508 | 0.9691 | 0.9 | 1.0 |
+| `models/compressed-l29` | 15.234 | 1.7819 | 0.4965 | 0.0 | 1.0 |
+| `models/base-llmc-awq` | 17.166 | 1.5814 | 0.5420 | 0.0 | 1.0 |
+| `models/compressed-l29-distilled` | 11.379 | 2.3856 | 0.4777 | 0.0 | 1.0 |
+| `models/compressed-l29-llmc-awq` | 10.564 | 2.5697 | 0.5155 | 0.1 | 1.0 |
+| `models/base-distilled-llmc-awq` | 11.221 | 2.4192 | 0.5359 | 0.1 | 1.0 |
+| `models/compressed-l29-distilled-llmc-awq` | 10.688 | 2.5399 | 0.5148 | 0.1 | 1.0 |
 
-| Prompt # | base | base-distilled | compressed-l29 | base-llmc-awq | compressed-l29-distilled | compressed-l29-llmc-awq | base-distilled-llmc-awq | compressed-l29-distilled-llmc-awq |
-|---:|---|---|---|---|---|---|---|---|
-| 1 | ∅ | ∅ | ∅ | ∅ | ∅ | ∅ | ∅ | ∅ |
-| 2 | ∅ | ∅ | ∅ | ∅ | ∅ | ␠ | ∅ | ␠ |
-| 3 | ∅ | ∅ | ∅ | ∅ | ∅ | ∅ | ∅ | ∅ |
-| 4 | ∅ | ∅ | ∅ | ∅ | ∅ | ∅ | ∅ | ∅ |
-| 5 | ∅ | ∅ | ∅ | ∅ | ∅ | ∅ | ∅ | ∅ |
-| 6 | ∅ | ∅ | ∅ | ∅ | ∅ | ko-3-loop | ∅ | ko-3-loop |
-| 7 | ∅ | ∅ | ∅ | ∅ | ∅ | ∅ | ∅ | ∅ |
-| 8 | ∅ | ∅ | ∅ | ∅ | ∅ | ∅ | ∅ | ∅ |
-| 9 | h×24 | h×24 | h×24 | ∅ | h×24 | ∅ | ∅ | ∅ |
-| 10 | ∅ | ∅ | ∅ | ∅ | ∅ | ∅ | ∅ | ∅ |
+참고:
+- 기존 empty-output 기반 점수 왜곡은 해결되었습니다.
+- 지금의 similarity/exact는 "정상 문장끼리 비교"가 되므로 이전보다 의미 있는 프록시입니다.
 
-해석:
-- 현재 설정에서는 대부분 프롬프트가 빈 문자열로 수렴합니다.
-- `avg_similarity`/`exact_match`가 높게 나오는 구간은 "빈 문자열끼리 일치" 영향이 큽니다.
-- 따라서 이 지표는 임시 프록시로만 보고, 실제 대회 성능 판단은 별도 벤치마크로 확인해야 합니다.
+### 4) 생성 예시 (수정 후)
+Prompt: `Explain model compression in one paragraph.`
+- `models/base`: `Model compression is the technique used to reduce the size ...`
+- `models/base-llmc-awq`: `Model compression is the process of reducing the size ...`
+- `models/compressed-l29-llmc-awq`: `Model compression is a technique used in deep learning ...`
 
-### 5) 추천 선택지 (현 시점)
-1. 품질 보수적: `models/compressed-l29`
-- 문자열 프록시 보존(1.0) + 소폭 용량 절감 + 속도 개선
+Prompt: `hello`
+- `models/base`: `Hello! 😊 How can I assist you today?`
+- `models/compressed-l29`: `Hello! How can I assist you today?`
+- `models/base-llmc-awq`: `Hello! 😊 How can I help you today?`
 
-2. 용량 우선: `models/base-llmc-awq` 또는 `models/compressed-l29-llmc-awq`
-- 약 45~46% 용량 절감
-- 다만 출력 안정성/품질 프록시 하락
-
-### 6) 재현 명령
+### 5) 실행 방법
 ```bash
-# 8-case 비교
+# 8개 모델 비교 (chat-fix 기본값 사용)
 uv run python scripts/08_eval_compare.py \
   --baseline-model models/base \
   --candidate-models \
@@ -90,35 +66,44 @@ uv run python scripts/08_eval_compare.py \
     models/compressed-l29-llmc-awq \
     models/base-distilled-llmc-awq \
     models/compressed-l29-distilled-llmc-awq \
-  --report-file outputs/eval_compare_all_8cases.json
+  --report-file outputs/eval_compare_all_8cases_chatfix.json
+```
+
+```bash
+# 단일 모델 검증 (빈 문자열 출력 시 실패)
+uv run python scripts/02_verify_vllm.py \
+  --model-dir models/base-llmc-awq \
+  --prompt "Explain model compression in one short paragraph." \
+  --report-file outputs/verify_base_llmc_awq_chatfix.json
 ```
 
 ---
 
 ## English (ENG)
 
-### 1) Goal
-This repo builds EXAONE-4.0-1.2B compressed variants compatible with the fixed `project_rules.txt` runtime and HF-style `submit.zip/model/*` packaging.
+### 1) Problem and Root Cause
+The previous eval path used `llm.generate()` with plain prompts.
+For EXAONE variants (especially compressed/quantized), that frequently caused immediate EOS and empty outputs.
 
-### 2) Worked path
-1. Baseline validation on vLLM eager mode
-2. Structured pruning (30 -> 29 layers)
-3. Distillation-style recovery
-4. AWQ quantization via `llmcompressor + compressed-tensors`
-5. Unified 8-case evaluation
+### 2) Refactor Applied
+1. `scripts/08_eval_compare.py`
+- Switched generation from `generate()` to `chat()`
+- Uses chat messages (`[{"role":"user","content":...}]`)
+- Default sampling: `temperature=0.0`, `min_tokens=8`, `max_tokens=64`
+- Added `non_empty_count` and `non_empty_rate` to the report
 
-### 3) Fresh rerun summary
-Fresh report file:
-- `/workspace/exaone-compression-clean/outputs/eval_compare_all_8cases_rerun.json`
+2. `scripts/02_verify_vllm.py`
+- Also switched to `chat()`
+- Hard-fails on empty generation (`Generated empty output.`)
 
-Key point:
-- Most prompts still collapse to empty strings across many variants.
-- So current `avg_similarity` / `exact_match` should be treated as a weak proxy (empty-vs-empty matches inflate scores).
+### 3) Post-fix Validation
+Report:
+- `/workspace/exaone-compression-clean/outputs/eval_compare_all_8cases_chatfix.json`
 
-### 4) Prompt-output matrix
-The full 10-prompt, 8-model matrix is listed in the Korean section above (same run, same report).
+Result:
+- **All 8 models achieved `non_empty_rate = 1.0` on all 10 fixed prompts**.
+- Empty-string collapse is resolved.
 
-### 5) Practical recommendation
-1. Quality-conservative: `models/compressed-l29`
-2. Size-first: `models/base-llmc-awq` or `models/compressed-l29-llmc-awq`
-3. Do not trust current proxy metrics alone for leaderboard decisions; run stronger quality checks.
+### 4) Notes
+- Similarity/exact-match now compare non-empty outputs, so they are more meaningful than before.
+- The metric is still a proxy; final leaderboard quality should be judged on task-specific benchmark outputs.

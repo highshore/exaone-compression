@@ -45,9 +45,18 @@ def run_once(model_dir: str, prompt: str, max_tokens: int, attempt_cfg: AttemptC
             dtype=attempt_cfg.dtype,
             enforce_eager=attempt_cfg.enforce_eager,
         )
-        params = SamplingParams(temperature=0.0, max_tokens=max_tokens)
-        outputs = llm.generate([prompt], params)
+        # EXAONE is chat-tuned; chat mode avoids immediate-EOS empty responses.
+        params = SamplingParams(
+            temperature=0.0,
+            top_p=1.0,
+            max_tokens=max_tokens,
+            min_tokens=8,
+            presence_penalty=0.0,
+        )
+        outputs = llm.chat([[{"role": "user", "content": prompt}]], params)
         text = outputs[0].outputs[0].text
+        if not text.strip():
+            raise RuntimeError("Generated empty output.")
         elapsed = time.time() - start
         return {"ok": True, "text": text, "elapsed_sec": round(elapsed, 3)}
     finally:

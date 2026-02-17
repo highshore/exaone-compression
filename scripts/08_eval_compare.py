@@ -30,7 +30,7 @@ def default_prompts() -> list[str]:
 def generate_outputs(
     model_dir: str,
     prompts: list[str],
-    max_tokens: int,
+    sampling_params: SamplingParams,
     max_model_len: int,
     gpu_memory_utilization: float,
 ) -> dict:
@@ -45,11 +45,16 @@ def generate_outputs(
             dtype="float16",
             enforce_eager=True,
         )
-        params = SamplingParams(temperature=0.0, max_tokens=max_tokens)
-        outs = llm.generate(prompts, params)
+        # EXAONE is chat-tuned; raw generate() often immediately emits EOS on plain prompts.
+        # Use chat format so all variants can produce non-empty, comparable outputs.
+        messages = [[{"role": "user", "content": prompt}] for prompt in prompts]
+        outs = llm.chat(messages, sampling_params)
         texts = [o.outputs[0].text for o in outs]
+        non_empty = sum(1 for t in texts if t.strip())
         return {
             "outputs": texts,
+            "non_empty_count": non_empty,
+            "non_empty_rate": round(non_empty / len(texts), 4),
             "elapsed_sec": round(time.time() - start, 3),
         }
     finally:
@@ -79,7 +84,11 @@ def main() -> None:
         required=True,
         help="One or more candidate model directories.",
     )
-    parser.add_argument("--max-tokens", type=int, default=48)
+    parser.add_argument("--max-tokens", type=int, default=64)
+    parser.add_argument("--min-tokens", type=int, default=8)
+    parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument("--top-p", type=float, default=1.0)
+    parser.add_argument("--presence-penalty", type=float, default=0.0)
     parser.add_argument("--max-model-len", type=int, default=4096)
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.85)
     parser.add_argument("--report-file", default="outputs/eval_compare.json")
@@ -91,11 +100,19 @@ def main() -> None:
     )
 
     prompts = default_prompts()
+    sampling_params = SamplingParams(
+        temperature=args.temperature,
+        top_p=args.top_p,
+        max_tokens=args.max_tokens,
+        min_tokens=args.min_tokens,
+        presence_penalty=args.presence_penalty,
+    )
+
     LOG.info("Evaluating with %d prompts", len(prompts))
     baseline = generate_outputs(
         model_dir=args.baseline_model,
         prompts=prompts,
-        max_tokens=args.max_tokens,
+        sampling_params=sampling_params,
         max_model_len=args.max_model_len,
         gpu_memory_utilization=args.gpu_memory_utilization,
     )
@@ -106,7 +123,7 @@ def main() -> None:
         cand = generate_outputs(
             model_dir=model_dir,
             prompts=prompts,
-            max_tokens=args.max_tokens,
+            sampling_params=sampling_params,
             max_model_len=args.max_model_len,
             gpu_memory_utilization=args.gpu_memory_utilization,
         )
@@ -125,16 +142,27 @@ def main() -> None:
                 "speedup_vs_baseline": round(speedup, 4),
                 "avg_similarity_to_baseline": round(sum(sims) / len(sims), 4),
                 "exact_match_rate": round(sum(exact) / len(exact), 4),
+                "non_empty_count": cand["non_empty_count"],
+                "non_empty_rate": cand["non_empty_rate"],
                 "outputs": cand["outputs"],
                 "per_prompt_similarity": [round(s, 4) for s in sims],
             }
         )
 
     report = {
+        "sampling_params": {
+            "temperature": args.temperature,
+            "top_p": args.top_p,
+            "presence_penalty": args.presence_penalty,
+            "max_tokens": args.max_tokens,
+            "min_tokens": args.min_tokens,
+        },
         "prompts": prompts,
         "baseline": {
             "model_dir": args.baseline_model,
             "elapsed_sec": baseline["elapsed_sec"],
+            "non_empty_count": baseline["non_empty_count"],
+            "non_empty_rate": baseline["non_empty_rate"],
             "outputs": baseline["outputs"],
         },
         "candidates": candidates,
@@ -150,7 +178,8 @@ def main() -> None:
             f"- {c['model_dir']}: elapsed={c['elapsed_sec']}s "
             f"speedup={c['speedup_vs_baseline']} "
             f"avg_similarity={c['avg_similarity_to_baseline']} "
-            f"exact_match_rate={c['exact_match_rate']}"
+            f"exact_match_rate={c['exact_match_rate']} "
+            f"non_empty_rate={c['non_empty_rate']}"
         )
 
 
